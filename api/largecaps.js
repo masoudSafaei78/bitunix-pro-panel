@@ -5,10 +5,10 @@ const COINGECKO='https://api.coingecko.com/api/v3';
 const n=v=>{const x=Number(v);return Number.isFinite(x)?x:null};
 const avg=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
 
-// Current market snapshot cache.
-const CG_TTL=10*60*1000;
-const CG_STALE_TTL=60*60*1000;
-let cgCache={at:0,data:null};
+// Current market snapshot cache. Keep the largest successful page-set and reuse it.
+const CG_TTL=15*60*1000;
+const CG_STALE_TTL=2*60*60*1000;
+let cgCache={at:0,data:null,pages:0};
 let cgInFlight=null;
 
 // Historical market-cap data changes slowly enough that a 6h cache is fine.
@@ -34,7 +34,7 @@ async function getJson(url,{source='upstream',headers={},retries=0}={}){
     lastError=new Error(`${source} ${r.status}`);
     if(r.status!==429 || attempt>=retries) throw lastError;
     const retryAfter=Number(r.headers.get('retry-after'));
-    await sleep(Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,5000):1400*(attempt+1));
+    await sleep(Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,5000):1600*(attempt+1));
   }
   throw lastError||new Error(`${source} failed`);
 }
@@ -45,19 +45,47 @@ async function bitunix(path){
   return j.data;
 }
 
-async function getCoinGeckoMarkets(){
+function pagesNeededForMinCap(minCap){
+  if(minCap<=10_000_000) return 4;
+  if(minCap<=25_000_000) return 4;
+  if(minCap<=50_000_000) return 3;
+  if(minCap<=100_000_000) return 2;
+  return 1;
+}
+
+async function getCoinGeckoMarkets(minCap){
   const now=Date.now();
-  if(cgCache.data && now-cgCache.at<CG_TTL) return {data:cgCache.data,cache:'fresh'};
+  const needPages=pagesNeededForMinCap(minCap);
+  if(cgCache.data && cgCache.pages>=needPages && now-cgCache.at<CG_TTL){
+    return {data:cgCache.data,cache:'fresh',pages:cgCache.pages};
+  }
   if(cgInFlight) return cgInFlight;
 
   cgInFlight=(async()=>{
+    const combined=[];
     try{
-      const data=await getJson(`${COINGECKO}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false&price_change_percentage=24h`,{source:'CoinGecko',retries:1});
-      if(!Array.isArray(data)) throw new Error('CoinGecko: unexpected response');
-      cgCache={at:Date.now(),data};
-      return {data,cache:'refreshed'};
+      for(let page=1;page<=needPages;page++){
+        try{
+          const data=await getJson(`${COINGECKO}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=false&price_change_percentage=24h`,{source:`CoinGecko page ${page}`,retries:1});
+          if(!Array.isArray(data)) throw new Error('CoinGecko: unexpected response');
+          combined.push(...data);
+          if(data.length<250) break;
+          // Small spacing between public API page calls reduces 429 bursts.
+          if(page<needPages) await sleep(700);
+        }catch(e){
+          // If later pages are rate-limited, keep already fetched pages instead of failing all results.
+          if(page>1 && combined.length) break;
+          throw e;
+        }
+      }
+      if(!combined.length) throw new Error('CoinGecko: no market data');
+      const pages=Math.ceil(combined.length/250);
+      cgCache={at:Date.now(),data:combined,pages};
+      return {data:combined,cache:pages>=needPages?'refreshed':'partial',pages};
     }catch(e){
-      if(cgCache.data && now-cgCache.at<CG_STALE_TTL) return {data:cgCache.data,cache:'stale'};
+      if(cgCache.data && now-cgCache.at<CG_STALE_TTL){
+        return {data:cgCache.data,cache:'stale',pages:cgCache.pages};
+      }
       throw e;
     }finally{
       cgInFlight=null;
@@ -100,7 +128,6 @@ async function getMarketCapHistory(coinId,currentCap){
       if(cached?.data && now-cached.at<HISTORY_STALE_TTL){
         return {...summarizeMarketCapHistory(cached.data,currentCap),marketCapHistoryCache:'stale'};
       }
-      // History failure must not break the entire scanner. The row remains usable.
       return {marketCap30dAvg:null,marketCap7dAvg:null,marketCapVs30dAvgPct:null,marketCap7dVs30dPct:null,marketCapSpikeLevel:'unavailable',marketCapHistoryCache:'unavailable',marketCapHistoryError:String(e?.message||e)};
     }finally{
       historyInFlight.delete(coinId);
@@ -140,14 +167,14 @@ async function mapWithConcurrency(items,limit,fn){
 export default async function handler(req,res){
   res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=900');
   try{
-    const minCap=Math.max(10_000_000,Number(req.query.minCap)||100_000_000);
+    const minCap=Math.max(5_000_000,Number(req.query.minCap)||25_000_000);
     const minPump=Math.max(-100,Number(req.query.minPump)||5);
-    const maxResults=Math.min(30,Math.max(5,Number(req.query.limit)||20));
+    const maxResults=Math.min(50,Math.max(5,Number(req.query.limit)||30));
 
     const [tickers,funding,cg]=await Promise.all([
       bitunix('/api/v1/futures/market/tickers'),
       bitunix('/api/v1/futures/market/funding_rate/batch'),
-      getCoinGeckoMarkets()
+      getCoinGeckoMarkets(minCap)
     ]);
     const coins=cg.data;
 
@@ -181,8 +208,6 @@ export default async function handler(req,res){
     matched.sort((a,b)=>b.change24hPct-a.change24hPct);
     const selected=matched.slice(0,maxResults);
 
-    // Keep both providers under control: Bitunix 4h data at 4-way concurrency,
-    // CoinGecko historical market-cap at only 2-way concurrency.
     const [changes4h,histories]=await Promise.all([
       mapWithConcurrency(selected,4,x=>fourHourChange(x.symbol)),
       mapWithConcurrency(selected,2,x=>getMarketCapHistory(x.coinGeckoId,x.marketCap))
@@ -195,6 +220,8 @@ export default async function handler(req,res){
       generatedAt:new Date().toISOString(),
       source:'CoinGecko current + 30d historical market cap; Bitunix Futures price/funding/kline',
       marketCapCache:cg.cache,
+      marketCapPages:cg.pages,
+      scannedMarketCoins:coins.length,
       minCap,minPump,count:enriched.length,items:enriched
     });
   }catch(e){
