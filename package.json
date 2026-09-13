@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "build": "node --check api/scan.js && node --check api/detail.js && node --check api/kline.js && node --check api/symbols.js && node --check api/largecaps.js && node --check lib/fundingRisk.mjs && rm -rf public && mkdir -p public && cp index.html largecap.html version.txt public/"
+    "build": "node --check api/scan.js && node --check api/detail.js && node --check api/kline.js && node --check api/symbols.js && node --check api/largecaps.js && node --check api/marketcap-history.js && node --check lib/fundingRisk.mjs && rm -rf public && mkdir -p public && cp index.html largecap.html version.txt public/"
   }
 }
