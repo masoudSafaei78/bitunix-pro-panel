@@ -3,13 +3,20 @@ import { getFundingRisk } from '../lib/fundingRisk.mjs';
 const BITUNIX='https://fapi.bitunix.com';
 const COINGECKO='https://api.coingecko.com/api/v3';
 const n=v=>{const x=Number(v);return Number.isFinite(x)?x:null};
+const avg=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
 
-// Best-effort warm-instance cache. CoinGecko market-cap data does not need to be
-// fetched on every page refresh. Stale data is preferable to a 429 failure.
+// Current market snapshot cache.
 const CG_TTL=10*60*1000;
 const CG_STALE_TTL=60*60*1000;
 let cgCache={at:0,data:null};
 let cgInFlight=null;
+
+// Historical market-cap data changes slowly enough that a 6h cache is fine.
+// On provider trouble we can keep a successful snapshot for up to 24h.
+const HISTORY_TTL=6*60*60*1000;
+const HISTORY_STALE_TTL=24*60*60*1000;
+const historyCache=new Map();
+const historyInFlight=new Map();
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
@@ -27,7 +34,7 @@ async function getJson(url,{source='upstream',headers={},retries=0}={}){
     lastError=new Error(`${source} ${r.status}`);
     if(r.status!==429 || attempt>=retries) throw lastError;
     const retryAfter=Number(r.headers.get('retry-after'));
-    await sleep(Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,5000):1200*(attempt+1));
+    await sleep(Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,5000):1400*(attempt+1));
   }
   throw lastError||new Error(`${source} failed`);
 }
@@ -50,8 +57,6 @@ async function getCoinGeckoMarkets(){
       cgCache={at:Date.now(),data};
       return {data,cache:'refreshed'};
     }catch(e){
-      // If the provider rate-limits us, keep serving the last successful snapshot
-      // for up to one hour instead of breaking the page.
       if(cgCache.data && now-cgCache.at<CG_STALE_TTL) return {data:cgCache.data,cache:'stale'};
       throw e;
     }finally{
@@ -59,6 +64,51 @@ async function getCoinGeckoMarkets(){
     }
   })();
   return cgInFlight;
+}
+
+function summarizeMarketCapHistory(points,currentCap){
+  const vals=(Array.isArray(points)?points:[])
+    .map(p=>Array.isArray(p)?n(p[1]):null)
+    .filter(v=>v!=null&&v>0);
+  if(!vals.length) return {marketCap30dAvg:null,marketCap7dAvg:null,marketCapVs30dAvgPct:null,marketCap7dVs30dPct:null,marketCapSpikeLevel:'unknown'};
+
+  const last30=vals.slice(-30);
+  const last7=vals.slice(-7);
+  const avg30=avg(last30);
+  const avg7=avg(last7);
+  const vs30=avg30&&currentCap!=null?((currentCap-avg30)/avg30)*100:null;
+  const avg7vs30=avg30&&avg7!=null?((avg7-avg30)/avg30)*100:null;
+  const level=vs30==null?'unknown':vs30>=40?'spike':vs30>=20?'elevated':vs30<=-20?'depressed':'normal';
+  return {marketCap30dAvg:avg30,marketCap7dAvg:avg7,marketCapVs30dAvgPct:vs30,marketCap7dVs30dPct:avg7vs30,marketCapSpikeLevel:level};
+}
+
+async function getMarketCapHistory(coinId,currentCap){
+  const now=Date.now();
+  const cached=historyCache.get(coinId);
+  if(cached?.data && now-cached.at<HISTORY_TTL) return {...summarizeMarketCapHistory(cached.data,currentCap),marketCapHistoryCache:'fresh'};
+  if(historyInFlight.has(coinId)) return historyInFlight.get(coinId);
+
+  const job=(async()=>{
+    try{
+      const url=`${COINGECKO}/coins/${encodeURIComponent(coinId)}/market_chart?vs_currency=usd&days=30&interval=daily`;
+      const data=await getJson(url,{source:`CoinGecko history ${coinId}`,retries:1});
+      const points=Array.isArray(data?.market_caps)?data.market_caps:[];
+      if(!points.length) throw new Error('CoinGecko history: no market cap data');
+      historyCache.set(coinId,{at:Date.now(),data:points});
+      return {...summarizeMarketCapHistory(points,currentCap),marketCapHistoryCache:'refreshed'};
+    }catch(e){
+      if(cached?.data && now-cached.at<HISTORY_STALE_TTL){
+        return {...summarizeMarketCapHistory(cached.data,currentCap),marketCapHistoryCache:'stale'};
+      }
+      // History failure must not break the entire scanner. The row remains usable.
+      return {marketCap30dAvg:null,marketCap7dAvg:null,marketCapVs30dAvgPct:null,marketCap7dVs30dPct:null,marketCapSpikeLevel:'unavailable',marketCapHistoryCache:'unavailable',marketCapHistoryError:String(e?.message||e)};
+    }finally{
+      historyInFlight.delete(coinId);
+    }
+  })();
+
+  historyInFlight.set(coinId,job);
+  return job;
 }
 
 async function fourHourChange(symbol){
@@ -88,12 +138,11 @@ async function mapWithConcurrency(items,limit,fn){
 }
 
 export default async function handler(req,res){
-  // CDN cache also prevents every browser refresh from invoking this function.
-  res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=600');
+  res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=900');
   try{
     const minCap=Math.max(10_000_000,Number(req.query.minCap)||100_000_000);
     const minPump=Math.max(-100,Number(req.query.minPump)||5);
-    const maxResults=Math.min(50,Math.max(5,Number(req.query.limit)||25));
+    const maxResults=Math.min(30,Math.max(5,Number(req.query.limit)||20));
 
     const [tickers,funding,cg]=await Promise.all([
       bitunix('/api/v1/futures/market/tickers'),
@@ -121,6 +170,7 @@ export default async function handler(req,res){
       const fundingIntervalHours=f?n(f.fundingInterval):null;
       const risk=getFundingRisk(fundingRate,fundingIntervalHours);
       matched.push({
+        coinGeckoId:c.id,
         symbol,name:c.name,marketCap:cap,marketCapRank:n(c.market_cap_rank),
         lastPrice:last,change24hPct:change24h,quoteVol24h:n(t.quoteVol),
         high24h:high,distanceFrom24hHighPct:high&&last!=null?((last-high)/high)*100:null,
@@ -130,10 +180,23 @@ export default async function handler(req,res){
 
     matched.sort((a,b)=>b.change24hPct-a.change24hPct);
     const selected=matched.slice(0,maxResults);
-    // Avoid a burst of many simultaneous Bitunix kline requests.
-    const enriched=await mapWithConcurrency(selected,4,async x=>({...x,change4hPct:await fourHourChange(x.symbol)}));
 
-    res.status(200).json({ok:true,generatedAt:new Date().toISOString(),source:'CoinGecko market cap + Bitunix Futures market data',marketCapCache:cg.cache,minCap,minPump,count:enriched.length,items:enriched});
+    // Keep both providers under control: Bitunix 4h data at 4-way concurrency,
+    // CoinGecko historical market-cap at only 2-way concurrency.
+    const [changes4h,histories]=await Promise.all([
+      mapWithConcurrency(selected,4,x=>fourHourChange(x.symbol)),
+      mapWithConcurrency(selected,2,x=>getMarketCapHistory(x.coinGeckoId,x.marketCap))
+    ]);
+
+    const enriched=selected.map((x,i)=>({...x,change4hPct:changes4h[i],...histories[i]}));
+
+    res.status(200).json({
+      ok:true,
+      generatedAt:new Date().toISOString(),
+      source:'CoinGecko current + 30d historical market cap; Bitunix Futures price/funding/kline',
+      marketCapCache:cg.cache,
+      minCap,minPump,count:enriched.length,items:enriched
+    });
   }catch(e){
     const message=String(e?.message||e);
     const status=message.includes('429')?429:502;
