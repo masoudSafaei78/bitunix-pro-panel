@@ -16,8 +16,11 @@
   <div class="box controls">
     <label>حداقل Market Cap
       <select id="cap">
+        <option value="5000000">$5M</option>
+        <option value="10000000">$10M</option>
+        <option value="25000000" selected>$25M</option>
         <option value="50000000">$50M</option>
-        <option value="100000000" selected>$100M</option>
+        <option value="100000000">$100M</option>
         <option value="250000000">$250M</option>
         <option value="500000000">$500M</option>
         <option value="1000000000">$1B</option>
@@ -34,7 +37,7 @@
     <button id="run">اسکن</button>
   </div>
   <div class="box muted" style="line-height:1.8">
-    <b>Market Cap Spike:</b> اگر Market Cap فعلی حداقل ۴۰٪ بالاتر از میانگین ۳۰روزه باشد هشدار قرمز می‌گیرد؛ ۲۰٪ تا ۴۰٪ زرد است.
+    <b>Market Cap Spike:</b> اگر Market Cap فعلی حداقل ۴۰٪ بالاتر از میانگین ۳۰روزه باشد هشدار قرمز می‌گیرد؛ ۲۰٪ تا ۴۰٪ زرد است. برای دیدن پامپ‌های کوچک‌تر، فیلتر $10M یا $5M را انتخاب کن.
   </div>
   <div id="meta" class="muted" style="margin-top:10px"></div>
   <div id="out" class="box">در حال دریافت...</div>
@@ -53,12 +56,12 @@ let lastItems=[];
 async function load(){
   E('out').textContent='در حال اسکن...';E('meta').textContent='';
   try{
-    const q=new URLSearchParams({minCap:E('cap').value,minPump:E('pump').value,limit:'20',t:Date.now()});
+    const q=new URLSearchParams({minCap:E('cap').value,minPump:E('pump').value,limit:'40',t:Date.now()});
     const r=await fetch('/api/largecaps?'+q),j=await r.json();
     if(!r.ok||!j.ok)throw new Error(j.error||'scan');
     lastItems=j.items||[];
     const historyOk=lastItems.filter(x=>x.marketCap30dAvg!=null).length;
-    E('meta').textContent='Source: '+j.source+' | Results: '+j.count+' | 30D history: '+historyOk+'/'+j.count+' | Current cap cache: '+(j.marketCapCache||'—');
+    E('meta').textContent='Source: '+j.source+' | Results: '+j.count+' | Market coins scanned: '+(j.scannedMarketCoins||'—')+' | CoinGecko pages: '+(j.marketCapPages||'—')+' | 30D history: '+historyOk+'/'+j.count+' | Cache: '+(j.marketCapCache||'—');
     E('out').innerHTML=lastItems.length?'<table><thead><tr><th>#</th><th>Symbol</th><th>Market Cap فعلی</th><th>میانگین 30D</th><th>فعلی vs 30D</th><th>میانگین 7D</th><th>7D vs 30D</th><th>وضعیت Cap</th><th>24h</th><th>4h</th><th>فاصله High</th><th>Volume 24h</th><th>Funding</th><th>ریسک</th></tr></thead><tbody>'+lastItems.map((x,i)=>'<tr data-s="'+x.symbol+'"><td>'+(i+1)+'</td><td><b>'+x.symbol+'</b><div class="muted" style="font-size:11px">'+x.name+'</div></td><td>'+compact(x.marketCap)+'</td><td>'+compact(x.marketCap30dAvg)+'</td><td class="'+(x.marketCapVs30dAvgPct>=0?'pos':'neg')+'">'+pct(x.marketCapVs30dAvgPct)+'</td><td>'+compact(x.marketCap7dAvg)+'</td><td class="'+(x.marketCap7dVs30dPct>=0?'pos':'neg')+'">'+pct(x.marketCap7dVs30dPct)+'</td><td class="'+spikeClass(x.marketCapSpikeLevel)+'">'+spikeText(x.marketCapSpikeLevel)+(x.marketCapHistoryCache==='stale'?'<div class="badge">stale cache</div>':'')+'</td><td class="'+(x.change24hPct>=0?'pos':'neg')+'">'+pct(x.change24hPct)+'</td><td class="'+(x.change4hPct>=0?'pos':'neg')+'">'+pct(x.change4hPct)+'</td><td>'+pct(x.distanceFrom24hHighPct)+'</td><td>'+compact(x.quoteVol24h)+'</td><td>'+((x.fundingRate==null)?'—':num(x.fundingRate,8)+'%')+'</td><td class="'+(x.fundingRiskLevel==='extreme'?'danger':x.fundingRiskLevel==='high'||x.fundingRiskLevel==='very-high'?'warn':'')+'">'+x.fundingRisk+'</td></tr>').join('')+'</tbody></table>':'موردی با این فیلتر پیدا نشد';
     E('out').querySelectorAll('tr[data-s]').forEach(tr=>tr.onclick=()=>detail(tr.dataset.s));
   }catch(e){E('out').innerHTML='<span class="neg">خطا: '+e.message+'</span>'}
