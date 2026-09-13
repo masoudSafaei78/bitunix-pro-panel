@@ -4,13 +4,13 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Large Cap Pump Scanner</title>
 <style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;padding:22px;background:#0b0f10;color:#e9efef;font-family:system-ui}.wrap{max-width:1280px;margin:auto}.top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center}.controls{display:flex;gap:8px;flex-wrap:wrap}.box{background:#111718;border:1px solid #293436;border-radius:12px;padding:12px;margin-top:14px}select,button,a{padding:9px 12px;border-radius:9px;border:1px solid #293436;background:#151d1e;color:#fff;text-decoration:none}button{cursor:pointer}.muted{color:#91a0a0}.pos{color:#3ddc97}.neg{color:#ff7c86}.warn{color:#f0c36a}.danger{color:#ff6672;font-weight:700}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:10px;border-bottom:1px solid #253032;text-align:right;white-space:nowrap}tr[data-s]{cursor:pointer}tr[data-s]:hover{background:#151d1e}.modalbg{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:14px}.modalbg.open{display:flex}.modal{width:min(760px,100%);max-height:90vh;overflow:auto;background:#111718;border-radius:16px}.head{display:flex;justify-content:space-between;padding:14px;border-bottom:1px solid #293436}.body{padding:15px}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.card{padding:10px;background:#151d1e;border:1px solid #253032;border-radius:10px}.k{font-size:12px;color:#91a0a0}@media(max-width:700px){body{padding:10px}.grid{grid-template-columns:1fr}.box{overflow:auto}}
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;padding:22px;background:#0b0f10;color:#e9efef;font-family:system-ui}.wrap{max-width:1500px;margin:auto}.top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center}.controls{display:flex;gap:8px;flex-wrap:wrap}.box{background:#111718;border:1px solid #293436;border-radius:12px;padding:12px;margin-top:14px;overflow:auto}select,button,a{padding:9px 12px;border-radius:9px;border:1px solid #293436;background:#151d1e;color:#fff;text-decoration:none}button{cursor:pointer}.muted{color:#91a0a0}.pos{color:#3ddc97}.neg{color:#ff7c86}.warn{color:#f0c36a}.danger{color:#ff6672;font-weight:700}.spike{color:#ff6672;font-weight:800}.elevated{color:#f0c36a;font-weight:700}.normal{color:#91a0a0}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:10px;border-bottom:1px solid #253032;text-align:right;white-space:nowrap}tr[data-s]{cursor:pointer}tr[data-s]:hover{background:#151d1e}.badge{display:inline-block;padding:3px 7px;border:1px solid #394648;border-radius:999px;font-size:11px;margin-top:3px}.modalbg{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:14px}.modalbg.open{display:flex}.modal{width:min(820px,100%);max-height:90vh;overflow:auto;background:#111718;border-radius:16px}.head{display:flex;justify-content:space-between;padding:14px;border-bottom:1px solid #293436}.body{padding:15px}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.card{padding:10px;background:#151d1e;border:1px solid #253032;border-radius:10px}.k{font-size:12px;color:#91a0a0}@media(max-width:700px){body{padding:10px}.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="top">
-    <div><h2>Large Cap Pump Scanner</h2><div class="muted">فقط قراردادهای USDT-M بیت‌یونیکس با مارکت‌کپ بزرگ‌تر</div></div>
+    <div><h2>Large Cap Pump Scanner</h2><div class="muted">Bitunix USDT-M + Market Cap فعلی و میانگین ۳۰ روزه</div></div>
     <a href="/">← پنل اصلی</a>
   </div>
   <div class="box controls">
@@ -33,6 +33,9 @@
     </label>
     <button id="run">اسکن</button>
   </div>
+  <div class="box muted" style="line-height:1.8">
+    <b>Market Cap Spike:</b> اگر Market Cap فعلی حداقل ۴۰٪ بالاتر از میانگین ۳۰روزه باشد هشدار قرمز می‌گیرد؛ ۲۰٪ تا ۴۰٪ زرد است.
+  </div>
   <div id="meta" class="muted" style="margin-top:10px"></div>
   <div id="out" class="box">در حال دریافت...</div>
 </div>
@@ -43,8 +46,51 @@ const pct=x=>x==null||!Number.isFinite(Number(x))?'—':(Number(x)>=0?'+':'')+Nu
 const num=(x,d=8)=>x==null||!Number.isFinite(Number(x))?'—':Number(x).toLocaleString('en-US',{maximumFractionDigits:d});
 const compact=x=>x==null||!Number.isFinite(Number(x))?'—':Number(x).toLocaleString('en-US',{notation:'compact',maximumFractionDigits:2});
 const card=(k,v,c='')=>'<div class="card"><div class="k">'+k+'</div><div class="'+c+'">'+v+'</div></div>';
-async function load(){E('out').textContent='در حال اسکن...';E('meta').textContent='';try{const q=new URLSearchParams({minCap:E('cap').value,minPump:E('pump').value,limit:'30',t:Date.now()});const r=await fetch('/api/largecaps?'+q),j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||'scan');E('meta').textContent='Source: '+j.source+' | Results: '+j.count;E('out').innerHTML=j.items.length?'<table><thead><tr><th>#</th><th>Symbol</th><th>Market Cap</th><th>24h</th><th>4h</th><th>فاصله از High 24h</th><th>Volume 24h</th><th>Funding</th><th>Interval</th><th>ریسک</th></tr></thead><tbody>'+j.items.map((x,i)=>'<tr data-s="'+x.symbol+'"><td>'+(i+1)+'</td><td><b>'+x.symbol+'</b><div class="muted" style="font-size:11px">'+x.name+'</div></td><td>'+compact(x.marketCap)+'</td><td class="'+(x.change24hPct>=0?'pos':'neg')+'">'+pct(x.change24hPct)+'</td><td class="'+(x.change4hPct>=0?'pos':'neg')+'">'+pct(x.change4hPct)+'</td><td>'+pct(x.distanceFrom24hHighPct)+'</td><td>'+compact(x.quoteVol24h)+'</td><td>'+((x.fundingRate==null)?'—':num(x.fundingRate,8)+'%')+'</td><td>'+(x.fundingIntervalHours==null?'—':num(x.fundingIntervalHours,2)+'h')+'</td><td class="'+(x.fundingRiskLevel==='extreme'?'danger':x.fundingRiskLevel==='high'||x.fundingRiskLevel==='very-high'?'warn':'')+'">'+x.fundingRisk+'</td></tr>').join('')+'</tbody></table>':'موردی با این فیلتر پیدا نشد';E('out').querySelectorAll('tr[data-s]').forEach(tr=>tr.onclick=()=>detail(tr.dataset.s))}catch(e){E('out').innerHTML='<span class="neg">خطا: '+e.message+'</span>'}}
-async function detail(s){E('modalbg').classList.add('open');E('title').textContent=s;E('body').textContent='در حال دریافت...';try{const r=await fetch('/api/detail?symbol='+encodeURIComponent(s)+'&t='+Date.now()),x=await r.json();if(!r.ok)throw new Error(x.error||'detail');const dh=x.high24h?((x.lastPrice-x.high24h)/x.high24h)*100:null;E('body').innerHTML='<div class="grid">'+card('24h',pct(x.change24hPct),x.change24hPct>=0?'pos':'neg')+card('Price',num(x.lastPrice))+card('24h Volume',compact(x.quoteVol24h))+card('Funding',x.fundingRate==null?'—':num(x.fundingRate,8)+'%')+card('Funding Interval',x.fundingIntervalHours==null?'—':num(x.fundingIntervalHours,2)+'h')+card('24h High',num(x.high24h))+card('Distance from 24h High',pct(dh))+card('ATH Bitunix Futures',num(x.athBitunixFutures))+card('Distance from ATH',pct(x.distanceFromAthPct))+'</div><div class="muted" style="margin-top:14px">برای Volume/RSI کامل، نماد را در پنل اصلی باز کن.</div>'}catch(e){E('body').innerHTML='<span class="neg">خطا: '+e.message+'</span>'}}
+const spikeText=x=>x==='spike'?'⚠️ جهش شدید':x==='elevated'?'⚠️ بالاتر از میانگین':x==='depressed'?'پایین‌تر از میانگین':x==='normal'?'عادی':'داده ناموجود';
+const spikeClass=x=>x==='spike'?'spike':x==='elevated'?'elevated':'normal';
+let lastItems=[];
+
+async function load(){
+  E('out').textContent='در حال اسکن...';E('meta').textContent='';
+  try{
+    const q=new URLSearchParams({minCap:E('cap').value,minPump:E('pump').value,limit:'20',t:Date.now()});
+    const r=await fetch('/api/largecaps?'+q),j=await r.json();
+    if(!r.ok||!j.ok)throw new Error(j.error||'scan');
+    lastItems=j.items||[];
+    const historyOk=lastItems.filter(x=>x.marketCap30dAvg!=null).length;
+    E('meta').textContent='Source: '+j.source+' | Results: '+j.count+' | 30D history: '+historyOk+'/'+j.count+' | Current cap cache: '+(j.marketCapCache||'—');
+    E('out').innerHTML=lastItems.length?'<table><thead><tr><th>#</th><th>Symbol</th><th>Market Cap فعلی</th><th>میانگین 30D</th><th>فعلی vs 30D</th><th>میانگین 7D</th><th>7D vs 30D</th><th>وضعیت Cap</th><th>24h</th><th>4h</th><th>فاصله High</th><th>Volume 24h</th><th>Funding</th><th>ریسک</th></tr></thead><tbody>'+lastItems.map((x,i)=>'<tr data-s="'+x.symbol+'"><td>'+(i+1)+'</td><td><b>'+x.symbol+'</b><div class="muted" style="font-size:11px">'+x.name+'</div></td><td>'+compact(x.marketCap)+'</td><td>'+compact(x.marketCap30dAvg)+'</td><td class="'+(x.marketCapVs30dAvgPct>=0?'pos':'neg')+'">'+pct(x.marketCapVs30dAvgPct)+'</td><td>'+compact(x.marketCap7dAvg)+'</td><td class="'+(x.marketCap7dVs30dPct>=0?'pos':'neg')+'">'+pct(x.marketCap7dVs30dPct)+'</td><td class="'+spikeClass(x.marketCapSpikeLevel)+'">'+spikeText(x.marketCapSpikeLevel)+(x.marketCapHistoryCache==='stale'?'<div class="badge">stale cache</div>':'')+'</td><td class="'+(x.change24hPct>=0?'pos':'neg')+'">'+pct(x.change24hPct)+'</td><td class="'+(x.change4hPct>=0?'pos':'neg')+'">'+pct(x.change4hPct)+'</td><td>'+pct(x.distanceFrom24hHighPct)+'</td><td>'+compact(x.quoteVol24h)+'</td><td>'+((x.fundingRate==null)?'—':num(x.fundingRate,8)+'%')+'</td><td class="'+(x.fundingRiskLevel==='extreme'?'danger':x.fundingRiskLevel==='high'||x.fundingRiskLevel==='very-high'?'warn':'')+'">'+x.fundingRisk+'</td></tr>').join('')+'</tbody></table>':'موردی با این فیلتر پیدا نشد';
+    E('out').querySelectorAll('tr[data-s]').forEach(tr=>tr.onclick=()=>detail(tr.dataset.s));
+  }catch(e){E('out').innerHTML='<span class="neg">خطا: '+e.message+'</span>'}
+}
+
+async function detail(s){
+  E('modalbg').classList.add('open');E('title').textContent=s;E('body').textContent='در حال دریافت...';
+  const row=lastItems.find(x=>x.symbol===s);
+  try{
+    const r=await fetch('/api/detail?symbol='+encodeURIComponent(s)+'&t='+Date.now()),x=await r.json();
+    if(!r.ok)throw new Error(x.error||'detail');
+    const dh=x.high24h?((x.lastPrice-x.high24h)/x.high24h)*100:null;
+    E('body').innerHTML='<div class="grid">'+
+      card('Market Cap فعلی',compact(row?.marketCap))+
+      card('میانگین Market Cap 30D',compact(row?.marketCap30dAvg))+
+      card('فعلی نسبت به 30D Avg',pct(row?.marketCapVs30dAvgPct),row?.marketCapVs30dAvgPct>=0?'pos':'neg')+
+      card('میانگین Market Cap 7D',compact(row?.marketCap7dAvg))+
+      card('7D Avg نسبت به 30D Avg',pct(row?.marketCap7dVs30dPct),row?.marketCap7dVs30dPct>=0?'pos':'neg')+
+      card('Market Cap Status',spikeText(row?.marketCapSpikeLevel),spikeClass(row?.marketCapSpikeLevel))+
+      card('24h',pct(x.change24hPct),x.change24hPct>=0?'pos':'neg')+
+      card('Price',num(x.lastPrice))+
+      card('24h Volume',compact(x.quoteVol24h))+
+      card('Funding',x.fundingRate==null?'—':num(x.fundingRate,8)+'%')+
+      card('Funding Interval',x.fundingIntervalHours==null?'—':num(x.fundingIntervalHours,2)+'h')+
+      card('24h High',num(x.high24h))+
+      card('Distance from 24h High',pct(dh))+
+      card('ATH Bitunix Futures',num(x.athBitunixFutures))+
+      card('Distance from ATH',pct(x.distanceFromAthPct))+
+    '</div><div class="muted" style="margin-top:14px">Market Cap history از CoinGecko و داده‌های Futures از Bitunix است. اگر History موقتاً rate-limit شود، ردیف حذف نمی‌شود و مقدار آن — نمایش داده می‌شود.</div>';
+  }catch(e){E('body').innerHTML='<span class="neg">خطا: '+e.message+'</span>'}
+}
+
 E('run').onclick=load;E('close').onclick=()=>E('modalbg').classList.remove('open');E('modalbg').onclick=e=>{if(e.target===E('modalbg'))E('modalbg').classList.remove('open')};load();
 </script>
 </body></html>
