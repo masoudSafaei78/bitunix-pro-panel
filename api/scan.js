@@ -12,9 +12,16 @@ export default async function handler(req,res){
   const fm=new Map((funding||[]).map(x=>[x.symbol,x]));
   const ranked=(tickers||[]).filter(x=>x.symbol?.endsWith('USDT')).map(x=>{const o=n(x.open),l=n(x.lastPrice??x.last);return{raw:x,symbol:x.symbol,last:l,change24hPct:o&&l!==null?((l-o)/o)*100:null}}).filter(x=>x.change24hPct!==null).sort((a,b)=>b.change24hPct-a.change24hPct);
   const elig=[];for(const x of ranked){if(elig.length>=5)break;try{if(await has30(x.symbol))elig.push(x)}catch{}}
-  const top5=await Promise.all(elig.map(async x=>{const f=fm.get(x.symbol)||null, fundingRate=f?n(f.fundingRate):null,fundingIntervalHours=f?n(f.fundingInterval):null,risk=getFundingRisk(fundingRate,fundingIntervalHours);let boll1h=null,boll4h=null;try{const[k1,k4]=await Promise.all([klines(x.symbol,'1h'),klines(x.symbol,'4h')]);boll1h=boll(k1);boll4h=boll(k4)}catch{}return{symbol:x.symbol,change24hPct:x.change24hPct,lastPrice:x.last,quoteVol24h:n(x.raw.quoteVol),fundingRate,fundingIntervalHours,fundingRisk:risk.label,fundingRiskLevel:risk.level,candidateDefaultAllowed:risk.candidateDefaultAllowed,candidateNote:risk.candidateNote,boll1h,boll4h}}));
-  const score=x=>['Bearish Re-entry','Upper Break','Stretched'].includes(x.boll1h?.signal)+['Bearish Re-entry','Upper Break','Stretched'].includes(x.boll4h?.signal);
-  const candidates=top5.filter(x=>x.candidateDefaultAllowed).sort((a,b)=>score(b)-score(a)).slice(0,3);
+  const top5=await Promise.all(elig.map(async x=>{const f=fm.get(x.symbol)||null, fundingRate=f?n(f.fundingRate):null,fundingIntervalHours=f?n(f.fundingInterval):null,risk=getFundingRisk(fundingRate,fundingIntervalHours);let boll1h=null,boll4h=null;try{const[k1,k4]=await Promise.all([klines(x.symbol,'1h'),klines(x.symbol,'4h')]);boll1h=boll(k1);boll4h=boll(k4)}catch{}const base={symbol:x.symbol,change24hPct:x.change24hPct,lastPrice:x.last,quoteVol24h:n(x.raw.quoteVol),fundingRate,fundingIntervalHours,fundingRisk:risk.label,fundingRiskLevel:risk.level,candidateDefaultAllowed:risk.candidateDefaultAllowed,candidateNote:risk.candidateNote,boll1h,boll4h};return{...base,correction:correctionScore(base)}}));
+  function correctionScore(x){
+ let s=0,reasons=[];
+ const addB=(b,tf)=>{if(!b)return;if(b.signal==='Bearish Re-entry'){s+=2;reasons.push(tf+' برگشت داخل باند')}else if(b.signal==='Upper Break'){s+=1.5;reasons.push(tf+' شکست باند بالا')}else if(b.signal==='Stretched'){s+=1;reasons.push(tf+' نزدیک سقف باند')}};
+ addB(x.boll1h,'1H');addB(x.boll4h,'4H');
+ if(x.change24hPct>=50){s+=2;reasons.push('رشد 24h بسیار شدید')}else if(x.change24hPct>=25){s+=1.5;reasons.push('رشد 24h شدید')}else if(x.change24hPct>=12){s+=1;reasons.push('رشد 24h بالا')};
+ if(x.fundingRiskLevel==='extreme'){s+=2;reasons.push('فاندینگ بسیار پرریسک')}else if(x.fundingRiskLevel==='very-high'||x.fundingRiskLevel==='high'){s+=1;reasons.push('فاندینگ پرریسک')};
+ return{score:Math.min(10,Math.round(s*10)/10),reasons};
+}
+  const candidates=top5.filter(x=>x.candidateDefaultAllowed).sort((a,b)=>(b.correction?.score||0)-(a.correction?.score||0)).slice(0,3);
   res.status(200).json({ok:true,generatedAt:new Date().toISOString(),bollinger:{period:20,stdDev:2,ma:'SMA',usesClosedCandles:true},top5,candidates});
  }catch(e){res.status(502).json({ok:false,error:String(e.message||e)})}
 }
