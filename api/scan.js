@@ -2,7 +2,7 @@ import { getFundingRisk } from '../lib/fundingRisk.mjs';
 const BASE='https://fapi.bitunix.com';
 async function J(path){const r=await fetch(BASE+path,{headers:{accept:'application/json','user-agent':'bitunix-pro-panel-v2/1.0'},cache:'no-store'});const j=await r.json();if(!r.ok||Number(j.code)!==0)throw new Error('Bitunix API error');return j.data}
 const n=v=>{const x=Number(v);return Number.isFinite(x)?x:null};
-function boll(rows,p=20,m=2){const c=rows.map(x=>n(x.close)).filter(x=>x!==null);if(c.length<p)return null;const w=c.slice(-p),mid=w.reduce((s,x)=>s+x,0)/p,sd=Math.sqrt(w.reduce((s,x)=>s+(x-mid)**2,0)/p),upper=mid+m*sd,lower=mid-m*sd,last=w.at(-1),prev=c.length>p?c.at(-2):null,pctB=upper===lower?null:(last-lower)/(upper-lower),width=mid?((upper-lower)/mid)*100:null;let signal='Inside';if(last>upper)signal='Upper Break';else if(pctB!==null&&pctB>=.9)signal='Stretched';if(prev!==null&&prev>upper&&last<=upper)signal='Bearish Re-entry';return{upper,mid,lower,pctB,widthPct:width,signal}}
+function boll(rows,p=20,m=2.5){const c=rows.map(x=>n(x.close)).filter(x=>x!==null);if(c.length<p)return null;const w=c.slice(-p),mid=w.reduce((s,x)=>s+x,0)/p,sd=Math.sqrt(w.reduce((s,x)=>s+(x-mid)**2,0)/p),upper=mid+m*sd,lower=mid-m*sd,last=w.at(-1),prev=c.length>p?c.at(-2):null,pctB=upper===lower?null:(last-lower)/(upper-lower),width=mid?((upper-lower)/mid)*100:null;let signal='Inside';if(last>upper)signal='Upper Break';else if(pctB!==null&&pctB>=.9)signal='Stretched';if(prev!==null&&prev>upper&&last<=upper)signal='Bearish Re-entry';return{upper,mid,lower,pctB,widthPct:width,signal}}
 async function klines(s,interval,limit=25){const now=Date.now(),unit=interval==='1h'?3600000:14400000,q=new URLSearchParams({symbol:s,interval,startTime:String(now-unit*(limit+3)),endTime:String(now),limit:String(limit+3),type:'LAST_PRICE'});const k=await J('/api/v1/futures/market/kline?'+q);return(k||[]).sort((a,b)=>Number(a.time)-Number(b.time)).filter(x=>Number(x.time)<Math.floor(now/unit)*unit)}
 async function has30(s){const now=Date.now(),d=Math.floor(now/86400000)*86400000,q=new URLSearchParams({symbol:s,interval:'1d',startTime:String(d-31*86400000),endTime:String(now),limit:'31',type:'LAST_PRICE'});const k=await J('/api/v1/futures/market/kline?'+q);return(k||[]).filter(x=>Number(x.time)<d).length>=30}
 export default async function handler(req,res){
@@ -22,6 +22,6 @@ export default async function handler(req,res){
  return{score:Math.min(10,Math.round(s*10)/10),reasons};
 }
   const candidates=top5.filter(x=>x.candidateDefaultAllowed).sort((a,b)=>(b.correction?.score||0)-(a.correction?.score||0)).slice(0,3);
-  res.status(200).json({ok:true,generatedAt:new Date().toISOString(),bollinger:{period:20,stdDev:2,ma:'SMA',usesClosedCandles:true},top5,candidates});
+  res.status(200).json({ok:true,generatedAt:new Date().toISOString(),bollinger:{period:20,stdDev:2.5,ma:'SMA',usesClosedCandles:true},top5,candidates});
  }catch(e){res.status(502).json({ok:false,error:String(e.message||e)})}
 }
